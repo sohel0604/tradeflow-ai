@@ -1,0 +1,79 @@
+# =============================================================================
+# TradeFlow AI — .gitignore
+# =============================================================================
+
+# --- Secrets (NEVER commit these) ---
+.env
+.env.local
+.env.production
+.env.staging
+*.pem
+*.key
+credentials.json
+service-account.json
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+env/
+.python-version
+
+# --- Node / Frontend ---
+node_modules/
+.next/
+dist/
+build/
+.npm/
+*.tsbuildinfo
+
+# --- IDE ---
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# --- Docker ---
+*.override.yml
+
+# --- Generated files ---
+/charts/
+/backend/charts/
+celerybeat-schedule
+celerybeat.pid
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Test artifacts ---
+.pytest_cache/
+.coverage
+htmlcov/
+*.xml
+.vitest/
+
+# --- Terraform ---
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars
+.terraform.lock.hcl
+
+# --- Alembic ---
+# Keep migrations, only ignore compiled artifacts
+
+# --- Misc ---
+*.tmp
+*.bak
+.cache/
