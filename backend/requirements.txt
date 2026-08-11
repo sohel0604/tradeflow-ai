@@ -1,0 +1,27 @@
+# =============================================================================
+# TradeFlow AI — Python Dependencies
+# Versions are pinned to ensure reproducible builds
+# Add new packages here and rebuild with: docker compose build backend
+# =============================================================================
+
+# Web framework
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+
+# We will add more packages each day as we build each feature
+# Day 9  → sqlalchemy, asyncpg, psycopg2-binary (database)
+# Day 17 → pydantic-settings (config)
+# Day 18 → structlog (logging)
+# Day 22 → yfinance, pandas, numpy (data fetching)
+# Day 24 → requests (Binance API)
+# Day 31 → celery, redis, flower (task queue)
+# Day 39 → ta (technical indicators)
+# Day 44 → TA-Lib (candlestick patterns)
+# Day 47 → vectorbt (backtesting)
+# Day 61 → anthropic (Claude AI)
+# Day 67 → mplfinance, matplotlib (chart generation)
+# Day 70 → boto3 (AWS S3)
+# Day 72 → sendgrid (email)
+# Day 74 → python-telegram-bot (Telegram)
+# Day 78 → python-jose, passlib (JWT auth)
+# Day 82 → stripe, razorpay (payments)
