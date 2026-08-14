@@ -10,6 +10,26 @@
 services:
 
   # ---------------------------------------------------------------------------
+  # Nginx — Reverse Proxy
+  # The only service exposed to the outside world on port 80
+  # Routes all traffic to the correct internal service
+  # ---------------------------------------------------------------------------
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    container_name: tradeflow_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - postgres
+      - mongodb
+      - redis
+    networks:
+      - tradeflow_net
+
+  # ---------------------------------------------------------------------------
   # PostgreSQL 15 — Primary relational database
   # Stores: users, price_bars, signals, backtest_results, watchlists, billing
   # ---------------------------------------------------------------------------
