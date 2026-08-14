@@ -1,0 +1,107 @@
+# =============================================================================
+# TradeFlow AI — Docker Compose
+# Builds up day by day:
+#   Day 3  → PostgreSQL only
+#   Day 4  → + MongoDB + Redis
+#   Day 5  → + Nginx
+#   Day 7  → + Backend + Celery Worker + Celery Beat + Flower
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 15 — Primary relational database
+  # Stores: users, price_bars, signals, backtest_results, watchlists, billing
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:15-alpine
+    container_name: tradeflow_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-tradeflow}
+      POSTGRES_USER: ${POSTGRES_USER:-tradeflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tradeflow123}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tradeflow} -d ${POSTGRES_DB:-tradeflow}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - tradeflow_net
+
+  # ---------------------------------------------------------------------------
+  # MongoDB 7 — Document database
+  # Stores: indicators, chart_patterns, backtest_trade_logs, ai_conversations
+  # Why MongoDB for these? They are nested JSON documents, not flat rows.
+  # A price bar is a flat row → PostgreSQL
+  # An indicator snapshot is a nested JSON doc → MongoDB
+  # ---------------------------------------------------------------------------
+  mongodb:
+    image: mongo:7-jammy
+    container_name: tradeflow_mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER:-tradeflow}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-tradeflow123}
+      MONGO_INITDB_DATABASE: ${MONGO_DB:-tradeflow}
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - tradeflow_net
+
+  # ---------------------------------------------------------------------------
+  # Redis 7 — In-memory store (3 jobs in one)
+  # Job 1: Celery broker  → task queue (pipeline tasks wait here)
+  # Job 2: Celery backend → task results are stored here
+  # Job 3: Cache          → API responses cached here (fast reads)
+  # Job 4: Pub/Sub        → WebSocket signal fan-out (Day 92)
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: tradeflow_redis
+    restart: unless-stopped
+    # requirepass sets a password — Redis is open by default, always protect it
+    command: redis-server --requirepass ${REDIS_PASSWORD:-tradeflow123}
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-tradeflow123}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - tradeflow_net
+
+# =============================================================================
+# Volumes — persistent data storage
+# Named volumes survive container restarts and removals
+# Use "docker compose down -v" to delete ALL data (fresh start)
+# =============================================================================
+volumes:
+  postgres_data:
+  mongo_data:
+  redis_data:
+
+# =============================================================================
+# Networks — private network so services can talk to each other by name
+# Example: backend connects to postgres using hostname "postgres" not localhost
+# =============================================================================
+networks:
+  tradeflow_net:
+    driver: bridge
