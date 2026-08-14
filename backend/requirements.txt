@@ -11,16 +11,15 @@ celery==5.4.0
 redis==5.0.7
 flower==2.0.1
 
-# --- Day 9+: Database (added when we write models) ---
-# sqlalchemy==2.0.31
-# asyncpg==0.29.0
-# psycopg2-binary==2.9.9
-# alembic==1.13.2
-# motor==3.4.0
-
-# --- Day 17+: Config + Validation ---
-# pydantic==2.8.2
-# pydantic-settings==2.3.4
+# --- Day 9: Database + Config ---
+sqlalchemy==2.0.31
+asyncpg==0.29.0
+psycopg2-binary==2.9.9
+alembic==1.13.2
+pymongo==4.7.3
+motor==3.5.1
+pydantic==2.8.2
+pydantic-settings==2.3.4
 
 # --- Day 18+: Logging ---
 # structlog==24.2.0
