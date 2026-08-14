@@ -10,6 +10,102 @@
 services:
 
   # ---------------------------------------------------------------------------
+  # FastAPI Backend — the main API server
+  # Handles: REST API, WebSocket, health check
+  # Hot-reload is ON (--reload) so code changes apply without rebuild
+  # ---------------------------------------------------------------------------
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: tradeflow_backend
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount source code so --reload picks up changes instantly
+      - ./backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - tradeflow_net
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # ---------------------------------------------------------------------------
+  # Celery Worker — runs background tasks
+  # Picks tasks off the Redis queue and executes them
+  # concurrency = number of tasks it can run at the same time
+  # ---------------------------------------------------------------------------
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: tradeflow_celery_worker
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - tradeflow_net
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=4 -Q default,pipeline,signals,alerts
+
+  # ---------------------------------------------------------------------------
+  # Celery Beat — the scheduler
+  # Triggers tasks on a schedule (like cron)
+  # Fires the daily pipeline at 06:00 IST every trading day
+  # Only ONE beat instance should ever run — it's the clock
+  # ---------------------------------------------------------------------------
+  celery_beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: tradeflow_celery_beat
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./backend:/app
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - tradeflow_net
+    command: celery -A app.celery_app beat --loglevel=info
+
+  # ---------------------------------------------------------------------------
+  # Flower — Celery task monitoring dashboard
+  # See all tasks: PENDING, RUNNING, SUCCESS, FAILURE
+  # Available at http://localhost:5555
+  # ---------------------------------------------------------------------------
+  flower:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: tradeflow_flower
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "5555:5555"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - tradeflow_net
+    command: celery -A app.celery_app flower --port=5555
+
+  # ---------------------------------------------------------------------------
   # Nginx — Reverse Proxy
   # The only service exposed to the outside world on port 80
   # Routes all traffic to the correct internal service
@@ -23,9 +119,7 @@ services:
     ports:
       - "80:80"
     depends_on:
-      - postgres
-      - mongodb
-      - redis
+      - backend
     networks:
       - tradeflow_net
 
