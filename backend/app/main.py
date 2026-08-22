@@ -1,36 +1,34 @@
 """
 TradeFlow AI — FastAPI Application
-Day 15: Properly structured app with all route groups registered.
-
-Structure:
-  app = FastAPI(lifespan=lifespan)
-    ↓
-  Middleware (added Day 16 onwards)
-    ↓
-  Route groups:
-    /api/v1/auth      ← JWT register/login (Day 79)
-    /api/v1/data      ← price bars, CSV upload (Day 28)
-    /api/v1/signals   ← AI signals (Day 88)
-    /api/v1/backtest  ← strategy results (Day 91)
-    /api/v1/watchlist ← user symbols (Day 89)
-    /api/v1/account   ← profile, billing, keys (Day 95)
+Day 15: Route groups registered
+Day 16: CORS + request logging middleware + exception handlers
+Day 17: Structured logging configured + /config-check dev route
 """
 import os
 from contextlib import asynccontextmanager
 
+import structlog
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
 from sqlalchemy import text
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.core.config import settings
+from app.core.logging import configure_logging
+from app.core.middleware import RequestLoggingMiddleware
+from app.core.exceptions import (
+    TradeFlowException,
+    tradeflow_exception_handler,
+    http_exception_handler,
+    validation_exception_handler,
+    global_exception_handler,
+)
 from app.core.database import (
     AsyncSessionLocal,
     close_mongo_connection,
     get_mongo_client,
 )
-
-# ---------------------------------------------------------------------------
-# Route routers — each feature group is its own module
-# ---------------------------------------------------------------------------
 from app.api.v1.routes import (
     auth,
     data,
@@ -38,32 +36,42 @@ from app.api.v1.routes import (
     backtest,
     watchlist,
     account,
+    config,
 )
+
+# ---------------------------------------------------------------------------
+# Configure structured logging FIRST — before anything else logs
+# ---------------------------------------------------------------------------
+configure_logging()
+logger = structlog.get_logger(__name__)
 
 
 # =============================================================================
-# Lifespan — runs BEFORE first request and AFTER last request
-# Use this for: DB connection warmup, background task startup, cleanup
+# Lifespan
 # =============================================================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # ---- STARTUP ----
+    logger.info(
+        "startup",
+        env=settings.app_env,
+        debug=settings.debug,
+        version="1.0.0",
+    )
+
     # Warm up MongoDB connection pool
-    # First request won't be slow from a cold connection
     get_mongo_client()
 
-    # Create charts directory if it doesn't exist
+    # Create charts directory
     os.makedirs(settings.charts_dir, exist_ok=True)
 
-    yield  # ← app runs and handles requests here
+    yield
 
-    # ---- SHUTDOWN ----
-    # Close MongoDB gracefully — flushes pending writes
+    logger.info("shutdown")
     await close_mongo_connection()
 
 
 # =============================================================================
-# Application factory
+# App factory
 # =============================================================================
 app = FastAPI(
     title="TradeFlow AI",
@@ -72,29 +80,65 @@ app = FastAPI(
         "Crypto, Forex, and Commodities."
     ),
     version="1.0.0",
-    docs_url="/docs",       # Swagger UI
-    redoc_url="/redoc",     # ReDoc UI
+    docs_url="/docs",
+    redoc_url="/redoc",
     lifespan=lifespan,
-    # Contact info shown in Swagger UI
-    contact={
-        "name": "TradeFlow AI",
-        "url": "https://tradeflow.ai",
-    },
 )
 
 
 # =============================================================================
+# Middleware — ORDER MATTERS
+# Middleware wraps the app like onion layers.
+# The LAST middleware added is the FIRST to process each request.
+#
+# Request flow:
+#   RequestLoggingMiddleware → CORSMiddleware → route handler
+# Response flow:
+#   route handler → CORSMiddleware → RequestLoggingMiddleware
+# =============================================================================
+
+# 1. CORS — must be early so preflight OPTIONS requests are handled
+#    before hitting auth or rate limiting middleware
+app.add_middleware(
+    CORSMiddleware,
+    # In production this comes from settings (e.g. "https://app.tradeflow.ai")
+    # In development allows localhost:3000 (React) and localhost:5173 (Vite)
+    allow_origins=settings.allowed_origins_list,
+    allow_credentials=True,       # allow cookies / Authorization header
+    allow_methods=["*"],          # GET, POST, PUT, DELETE, OPTIONS
+    allow_headers=["*"],          # Authorization, Content-Type, X-API-Key etc.
+)
+
+# 2. Request logging + correlation IDs
+#    Wraps every request: adds correlation ID, times the request, logs it
+app.add_middleware(RequestLoggingMiddleware)
+
+
+# =============================================================================
+# Exception handlers
+# Registered in order of specificity — most specific first
+# =============================================================================
+
+# Our custom exceptions (NotFoundError, PlanLimitError etc.)
+app.add_exception_handler(TradeFlowException, tradeflow_exception_handler)
+
+# FastAPI/Starlette HTTP exceptions (404, 403, 422 etc.)
+app.add_exception_handler(StarletteHTTPException, http_exception_handler)
+
+# Pydantic validation errors (missing fields, wrong types)
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
+
+# Catch-all for any unhandled exception → clean 500 response, no stack trace
+app.add_exception_handler(Exception, global_exception_handler)
+
+
+# =============================================================================
 # Health endpoints
-# These are the MOST important routes — Nginx, Kubernetes, and monitoring
-# all rely on these to know if the app is alive.
 # =============================================================================
 
 @app.get("/health", tags=["health"], summary="Basic health check")
 async def health_check():
-    """
-    Returns 200 OK when the API process is running.
-    Used by: Nginx upstream check, Kubernetes liveness probe.
-    """
+    """Returns 200 OK when the API is running."""
     return {
         "status": "ok",
         "service": "tradeflow-api",
@@ -105,42 +149,33 @@ async def health_check():
 
 @app.get("/health/db", tags=["health"], summary="Database health check")
 async def health_check_db():
-    """
-    Checks both PostgreSQL and MongoDB are reachable.
-    Used by: Kubernetes readiness probe, Grafana dashboards.
-    """
-    status = {"postgres": "unknown", "mongodb": "unknown"}
+    """Checks PostgreSQL and MongoDB are reachable."""
+    db_status = {"postgres": "unknown", "mongodb": "unknown"}
 
-    # ---- PostgreSQL ----
     try:
         async with AsyncSessionLocal() as session:
             await session.execute(text("SELECT 1"))
-        status["postgres"] = "ok"
+        db_status["postgres"] = "ok"
     except Exception as exc:
-        status["postgres"] = f"error: {exc}"
+        db_status["postgres"] = f"error: {exc}"
 
-    # ---- MongoDB ----
     try:
         client = get_mongo_client()
         await client.admin.command("ping")
-        status["mongodb"] = "ok"
+        db_status["mongodb"] = "ok"
     except Exception as exc:
-        status["mongodb"] = f"error: {exc}"
+        db_status["mongodb"] = f"error: {exc}"
 
-    overall = "ok" if all(v == "ok" for v in status.values()) else "degraded"
+    overall = "ok" if all(v == "ok" for v in db_status.values()) else "degraded"
+    return {"status": overall, "databases": db_status}
 
-    return {"status": overall, "databases": status}
 
-
-@app.get("/", tags=["health"], summary="Root — API info")
+@app.get("/", tags=["health"], summary="API info")
 async def root():
-    """API information and available endpoints."""
     return {
         "service": "TradeFlow AI",
         "version": "1.0.0",
         "docs": "/docs",
-        "health": "/health",
-        "health_db": "/health/db",
         "routes": {
             "auth":      "/api/v1/auth",
             "data":      "/api/v1/data",
@@ -153,43 +188,14 @@ async def root():
 
 
 # =============================================================================
-# Register all routers
-#
-# Each router has:
-#   prefix  → URL prefix for all routes in that router
-#   tags    → Swagger UI grouping
-#
-# Example: auth router has GET /status
-#          registered at → GET /api/v1/auth/status
+# Routers
 # =============================================================================
+app.include_router(auth.router,      prefix="/api/v1/auth",      tags=["auth"])
+app.include_router(data.router,      prefix="/api/v1/data",      tags=["data"])
+app.include_router(signals.router,   prefix="/api/v1/signals",   tags=["signals"])
+app.include_router(backtest.router,  prefix="/api/v1/backtest",  tags=["backtest"])
+app.include_router(watchlist.router, prefix="/api/v1/watchlist", tags=["watchlist"])
+app.include_router(account.router,   prefix="/api/v1/account",   tags=["account"])
 
-app.include_router(
-    auth.router,
-    prefix="/api/v1/auth",
-    tags=["auth"],
-)
-app.include_router(
-    data.router,
-    prefix="/api/v1/data",
-    tags=["data"],
-)
-app.include_router(
-    signals.router,
-    prefix="/api/v1/signals",
-    tags=["signals"],
-)
-app.include_router(
-    backtest.router,
-    prefix="/api/v1/backtest",
-    tags=["backtest"],
-)
-app.include_router(
-    watchlist.router,
-    prefix="/api/v1/watchlist",
-    tags=["watchlist"],
-)
-app.include_router(
-    account.router,
-    prefix="/api/v1/account",
-    tags=["account"],
-)
+# Dev-only config check route (blocked in production)
+app.include_router(config.router, prefix="/api/v1/dev", tags=["dev"])

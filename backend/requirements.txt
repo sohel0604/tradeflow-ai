@@ -21,6 +21,9 @@ motor==3.5.1
 pydantic==2.8.2
 pydantic-settings==2.3.4
 
+# --- Day 16: Logging ---
+structlog==24.2.0
+
 # --- Day 18+: Logging ---
 # structlog==24.2.0
 
