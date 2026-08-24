@@ -61,6 +61,11 @@ async def lifespan(app: FastAPI):
     # Warm up MongoDB connection pool
     get_mongo_client()
 
+    # Create MongoDB indexes for fast queries
+    from app.services.mongo_service import indicators, chart_patterns
+    await indicators.ensure_indexes()
+    await chart_patterns.ensure_indexes()
+
     # Create charts directory
     os.makedirs(settings.charts_dir, exist_ok=True)
 
